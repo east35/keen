@@ -1,9 +1,10 @@
 :root {
   --bg: #0f0b08;
-  --text: #f4f1ef;
-  --muted: #cfc8c1;
-  --button-bg: #f4f1ef;
-  --button-text: #1a1613;
+  --bg-soft: #130d09;
+  --text: #f3f0ed;
+  --muted: #c9c1b9;
+  --button-bg: #f2efec;
+  --button-text: #1b1714;
   --focus: #d9b780;
 }
 
@@ -14,74 +15,73 @@
 html,
 body {
   margin: 0;
-  min-height: 100%;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
-  background: radial-gradient(120% 120% at 100% 0%, #120d09 0%, var(--bg) 55%);
+  position: relative;
+  background: radial-gradient(140% 130% at 100% 0%, var(--bg-soft) 0%, var(--bg) 56%);
   color: var(--text);
   font-family: "Crimson Pro", Georgia, serif;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
 }
 
 .page {
-  flex: 1;
-  width: min(1280px, 100%);
+  width: min(1400px, 100%);
+  height: 100svh;
   margin: 0 auto;
-  padding: clamp(1.75rem, 5vw, 4.5rem) clamp(1.25rem, 6vw, 5.5rem)
-    clamp(5.5rem, 10vh, 7rem);
+  padding: clamp(1.2rem, 4vw, 3.75rem) clamp(1.2rem, 5vw, 5rem) clamp(5rem, 9vh, 7rem);
   display: grid;
-  grid-template-columns: minmax(320px, 460px) 1fr;
+  grid-template-columns: minmax(290px, 470px) 1fr;
   align-items: center;
-  gap: clamp(1rem, 4vw, 4rem);
+  gap: clamp(1rem, 3vw, 3rem);
 }
 
 .content {
-  max-width: 440px;
-  z-index: 2;
+  z-index: 3;
+  max-width: 420px;
 }
 
 .wordmark {
   margin: 0;
   font-family: "Barlow Condensed", sans-serif;
   font-weight: 500;
-  font-size: clamp(4.5rem, 8.6vw, 7.25rem);
-  line-height: 0.85;
+  font-size: clamp(4.9rem, 7.5vw, 7.6rem);
+  line-height: 0.84;
   letter-spacing: 0.01em;
   text-transform: lowercase;
 }
 
 .subtitle {
-  margin: clamp(1rem, 1.9vw, 1.55rem) 0 0;
+  margin: clamp(0.95rem, 1.8vw, 1.6rem) 0 0;
+  padding-left: 1rem;
+  border-left: 2px solid rgba(255, 255, 255, 0.92);
   font-family: "Crimson Pro", serif;
   font-weight: 400;
-  font-size: clamp(1.9rem, 2.2vw, 3rem);
-  line-height: 1.12;
-  max-width: 16ch;
-  border-left: 2px solid rgba(255, 255, 255, 0.92);
-  padding-left: 0.95rem;
+  font-size: clamp(2rem, 2.35vw, 3.2rem);
+  line-height: 1.08;
+  max-width: 13ch;
 }
 
 .cta {
   display: inline-block;
-  margin-top: clamp(1.65rem, 3vw, 2.2rem);
+  margin-top: clamp(1.25rem, 2.5vw, 2rem);
+  padding: 0.72rem 1.42rem;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 0;
   background: var(--button-bg);
   color: var(--button-text);
   text-decoration: none;
   font-family: "Crimson Pro", serif;
   font-weight: 500;
-  font-size: clamp(1.35rem, 1.35vw, 1.65rem);
-  padding: 0.75rem 1.4rem;
-  border: 1px solid rgba(255, 255, 255, 0.42);
-  border-radius: 0;
-  transition: transform 120ms ease, filter 120ms ease;
+  font-size: clamp(1.35rem, 1.35vw, 1.9rem);
+  transition: transform 140ms ease, filter 140ms ease;
 }
 
 .cta:hover {
   transform: translateY(-1px);
-  filter: brightness(0.97);
+  filter: brightness(0.98);
 }
 
 .cta:focus-visible {
@@ -90,107 +90,125 @@ body {
 }
 
 .first-launch {
-  margin: 0.9rem 0 0;
-  font-size: clamp(0.95rem, 1vw, 1.05rem);
+  margin: 0.72rem 0 0;
   color: var(--muted);
+  font-size: clamp(1rem, 0.95vw, 1.1rem);
 }
 
 .hero {
-  align-self: stretch;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  overflow: hidden;
+  z-index: 2;
 }
 
 .hero-image {
-  display: block;
-  width: min(60vw, 790px);
-  max-width: none;
+  width: min(57vw, 860px);
+  max-height: 87vh;
   height: auto;
   object-fit: contain;
-  object-position: right center;
-  transform: translate(6%, 3%);
+  object-position: center;
+  transform: translate(7%, 7%);
 }
 
 .footer {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 1.1rem;
+  bottom: 1.2rem;
+  z-index: 4;
   display: flex;
-  align-items: center;
   justify-content: center;
+  align-items: center;
   gap: 0.6rem;
   font-family: "Crimson Pro", serif;
   font-size: 0.96rem;
-  color: rgba(244, 241, 239, 0.6);
+  color: rgba(243, 240, 237, 0.58);
 }
 
 .footer a {
-  color: rgba(244, 241, 239, 0.75);
+  color: rgba(243, 240, 237, 0.7);
   text-decoration: underline;
   text-underline-offset: 0.12em;
 }
 
 .dot {
-  width: 0.23rem;
-  height: 0.23rem;
+  width: 0.22rem;
+  height: 0.22rem;
   border-radius: 999px;
-  background: rgba(244, 241, 239, 0.45);
+  background: rgba(243, 240, 237, 0.42);
 }
 
-@media (max-width: 900px) {
+.bottom-gradient {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 27px;
+  background: url("assets/gradient.png") center / cover no-repeat;
+  pointer-events: none;
+  z-index: 5;
+}
+
+@media (max-width: 860px) {
   .page {
     grid-template-columns: 1fr;
-    gap: 1.1rem;
+    align-content: start;
     justify-items: center;
-    padding: 2.4rem 1.6rem 7.2rem;
+    padding: clamp(2rem, 6vw, 3.4rem) 1.2rem 6.2rem;
+    gap: 0;
   }
 
   .content {
+    width: 100%;
+    max-width: none;
     text-align: center;
-    max-width: 100%;
+    z-index: 4;
   }
 
   .wordmark {
-    font-size: clamp(4.6rem, 20vw, 7.5rem);
+    font-size: clamp(4.8rem, 22vw, 7.8rem);
+    line-height: 0.84;
   }
 
   .subtitle {
-    margin: 1rem auto 0;
+    margin: 0.95rem auto 0;
     max-width: none;
     border-left: 0;
     padding-left: 0;
-    font-size: clamp(2rem, 8vw, 2.9rem);
-    line-height: 1.08;
+    font-size: clamp(2.1rem, 9vw, 3.2rem);
+    line-height: 1.06;
   }
 
   .cta {
-    margin-top: 1.5rem;
-    font-size: clamp(1.7rem, 6vw, 2.15rem);
-    padding: 0.86rem 1.55rem;
+    margin-top: 1.35rem;
+    font-size: clamp(1.9rem, 6.1vw, 2.4rem);
+    padding: 0.82rem 1.7rem;
   }
 
   .first-launch {
-    font-size: clamp(1rem, 3.2vw, 1.2rem);
-    margin-top: 0.8rem;
+    font-size: clamp(1.12rem, 3.25vw, 1.35rem);
+    margin-top: 0.72rem;
   }
 
   .hero {
+    position: absolute;
+    left: 50%;
+    bottom: -5%;
+    transform: translateX(-50%);
     width: 100%;
-    min-height: 46vh;
     justify-content: center;
-    align-items: flex-start;
+    z-index: 1;
   }
 
   .hero-image {
-    width: min(128vw, 760px);
-    transform: translate(0, -6%);
+    width: min(120vw, 760px);
+    max-height: none;
+    transform: none;
   }
 
   .footer {
+    font-size: 0.88rem;
     bottom: 0.9rem;
-    font-size: 0.9rem;
   }
 }
