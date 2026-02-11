@@ -19,15 +19,13 @@ cd keen
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+pip install pyinstaller
 
-# Build the app
-pyinstaller --onedir --windowed --name "Kindle Send" --icon AppIcon.icns \
-  --add-data "iconTemplate.png:." --add-data "iconTemplate@2x.png:." kindle_menubar.py
-
-cp iconTemplate.png iconTemplate@2x.png "dist/Kindle Send.app/Contents/Resources/"
+# Build the app bundle from spec
+bash scripts/build_macos.sh
 
 # Install to Applications
-cp -r "dist/Kindle Send.app" /Applications/
+cp -R "dist/Keen.app" /Applications/
 ```
 
 ### Option 2: Run in dev mode
@@ -36,6 +34,65 @@ cp -r "dist/Kindle Send.app" /Applications/
 source venv/bin/activate
 python kindle_menubar.py
 ```
+
+Note: In dev mode, macOS notifications are attributed to `Python` (interpreter process). To get the proper app name/icon in notifications and the app menu, run the packaged `dist/Keen.app`.
+
+## Diagnostics & Logs
+
+Keen writes logs to:
+
+`~/Library/Logs/Keen/keen.log`
+
+Follow logs while testing:
+
+```bash
+tail -f ~/Library/Logs/Keen/keen.log
+```
+
+Run GUI from source with logs:
+
+```bash
+cd keen
+source venv/bin/activate
+python kindle_menubar.py
+```
+
+Run packaged app from Terminal (shows stdout/stderr too):
+
+```bash
+cd keen
+open dist/Keen.app
+# or run the binary directly:
+./dist/Keen.app/Contents/MacOS/Keen
+```
+
+Quick extraction smoke test (no GUI):
+
+```bash
+cd keen
+source venv/bin/activate
+python -m keen.diagnose "https://example.com/article"
+```
+
+Clipboard path test:
+
+```bash
+pbcopy < <(printf '%s' 'https://example.com/article')
+```
+
+Then click **Keen → Send from Clipboard**.
+
+Paste URL path test:
+
+1. Click **Keen → Send Article to Kindle**
+2. Paste a valid `https://...` URL and click **Send**
+
+Expected notifications:
+
+- `Starting...` when action begins
+- `Sent ✅` on success
+- `Error ...` on failure
+- `Invalid URL` or `Canceled` for invalid/canceled input
 
 ## Setup
 
@@ -60,7 +117,7 @@ In the same Amazon settings page, scroll to **Approved Personal Document E-mail 
 
 ### 4. Configure the app
 
-1. Click the **K** icon in your menu bar
+1. Click the **Keen** icon in your menu bar
 2. Select **Settings...**
 3. Enter your Kindle email, Gmail, and app password
 
@@ -69,7 +126,7 @@ Settings are saved to `~/Library/Application Support/KindleSend/config.json`
 ## Usage
 
 1. Copy an article URL to your clipboard
-2. Click the **K** icon in your menu bar
+2. Click the **Keen** icon in your menu bar
 3. Select **Send from Clipboard** or **Send Article to Kindle**
 4. Article arrives on your Kindle in 1-2 minutes
 

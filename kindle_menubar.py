@@ -1,26 +1,113 @@
 #!/usr/bin/env python3
 """
-Kindle Send - macOS Menu Bar App
+Keen - macOS Menu Bar App
 Send web articles to your Kindle with one click.
 """
 
-import rumps
-import threading
-import smtplib
-import re
-import os
 import json
-from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
+import logging
+import os
+import re
+import smtplib
+import threading
+import traceback
+from configparser import ConfigParser
 from datetime import datetime
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
 from pathlib import Path
+from urllib.parse import urlparse
 
-import trafilatura
 import requests
+import rumps
+import trafilatura
 
 # Config file location
 CONFIG_DIR = Path.home() / "Library" / "Application Support" / "KindleSend"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+LOG_DIR = Path.home() / "Library" / "Logs" / "Keen"
+LOG_FILE = LOG_DIR / "keen.log"
+APP_NAME = "Keen"
+
+TRAFILATURA_DEFAULTS = {
+    "DOWNLOAD_TIMEOUT": "30",
+    "MAX_FILE_SIZE": "20000000",
+    "MIN_FILE_SIZE": "10",
+    "SLEEP_TIME": "5.0",
+    "USER_AGENTS": "",
+    "COOKIE": "",
+    "MAX_REDIRECTS": "2",
+    "MIN_EXTRACTED_SIZE": "250",
+    "MIN_EXTRACTED_COMM_SIZE": "1",
+    "MIN_OUTPUT_SIZE": "1",
+    "MIN_OUTPUT_COMM_SIZE": "1",
+    "MAX_TREE_SIZE": "",
+    "EXTRACTION_TIMEOUT": "30",
+    "MIN_DUPLCHECK_SIZE": "100",
+    "MAX_REPETITIONS": "2",
+    "EXTENSIVE_DATE_SEARCH": "on",
+    "EXTERNAL_URLS": "off",
+}
+
+LOGGER = None
+
+
+def get_logger() -> logging.Logger:
+    """Create/reuse file logger for app diagnostics."""
+    global LOGGER
+    if LOGGER is not None:
+        return LOGGER
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("keen")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    if not logger.handlers:
+        handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(threadName)s %(message)s")
+        )
+        logger.addHandler(handler)
+    LOGGER = logger
+    return logger
+
+
+def notify(title: str, subtitle: str, message: str):
+    """Show a user notification and log it."""
+    logger = get_logger()
+    logger.info(
+        "notification title=%r subtitle=%r message=%r", title, subtitle, message
+    )
+    try:
+        rumps.notification(title, subtitle, message)
+    except Exception:
+        logger.exception("failed to display macOS notification")
+
+
+def is_valid_url(url: str) -> bool:
+    """Validate HTTP(S) URLs."""
+    parsed = urlparse(url)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def build_trafilatura_config() -> ConfigParser:
+    """Build extraction config with safe defaults so missing options never crash."""
+    config = ConfigParser()
+    config.read_dict({"DEFAULT": TRAFILATURA_DEFAULTS})
+
+    try:
+        settings_file = Path(trafilatura.settings.__file__).with_name("settings.cfg")
+        if settings_file.exists():
+            config.read(settings_file)
+    except Exception:
+        get_logger().exception(
+            "failed to load trafilatura settings.cfg, using fallbacks"
+        )
+
+    for key, value in TRAFILATURA_DEFAULTS.items():
+        if not config.has_option("DEFAULT", key):
+            config.set("DEFAULT", key, value)
+    return config
 
 
 def load_config() -> dict:
@@ -49,34 +136,47 @@ def save_config(config: dict):
         json.dump(config, f, indent=2)
 
 
-def get_icon_path() -> str:
-    """Get path to menu bar icon."""
+def resource_path(name: str) -> Path:
+    """Resolve resources in dev and PyInstaller bundle contexts."""
     import sys
-    # Try multiple locations
+
+    meipass = getattr(sys, "_MEIPASS", None)
     candidates = [
-        Path(__file__).parent / "iconTemplate.png",  # Dev mode
+        Path(__file__).parent / name,
     ]
-    if getattr(sys, 'frozen', False):
-        # Running as compiled app - check Resources folder
+    if meipass:
+        candidates.insert(0, Path(meipass) / name)
+    if getattr(sys, "frozen", False):
         bundle_dir = Path(sys.executable).parent.parent / "Resources"
-        candidates.insert(0, bundle_dir / "iconTemplate.png")
-    
-    for icon in candidates:
-        if icon.exists():
-            return str(icon)
+        candidates.insert(0, bundle_dir / name)
+
+    for path in candidates:
+        if path.exists():
+            return path
+    return Path(name)
+
+
+def get_icon_path() -> str:
+    """Get path to menu bar template icon."""
+    icon = resource_path("iconTemplate.png")
+    if icon.exists():
+        return str(icon)
     return None
 
 
 class KindleSendApp(rumps.App):
     def __init__(self):
-        # Use template icon for light/dark mode support
+        # Template icon ensures proper automatic tinting in light/dark mode.
         icon_path = get_icon_path()
         if icon_path:
             super().__init__("", icon=icon_path, template=True, quit_button=None)
         else:
             # Fallback to text
             super().__init__("K", quit_button=None)
+        self.logger = get_logger()
         self.config = load_config()
+        self.extract_config = build_trafilatura_config()
+        self.logger.info("app started")
 
         self.menu = [
             rumps.MenuItem("Send Article to Kindle", callback=self.send_article),
@@ -88,6 +188,7 @@ class KindleSendApp(rumps.App):
 
     @rumps.clicked("Send Article to Kindle")
     def send_article(self, _):
+        self.logger.info("action invoked action=paste_url")
         window = rumps.Window(
             message="Paste the article URL:",
             title="Send to Kindle",
@@ -97,21 +198,42 @@ class KindleSendApp(rumps.App):
             dimensions=(400, 24),
         )
         response = window.run()
-        if response.clicked and response.text.strip():
-            self.process_url(response.text.strip())
+        if not response.clicked:
+            notify(APP_NAME, "Canceled", "Send canceled")
+            self.logger.info("action canceled action=paste_url")
+            return
+
+        url = response.text.strip()
+        if not url:
+            notify(APP_NAME, "Canceled", "No URL entered")
+            self.logger.info("action canceled action=paste_url reason=empty_input")
+            return
+
+        if not is_valid_url(url):
+            notify(APP_NAME, "Invalid URL", "Please enter a valid http(s) URL")
+            self.logger.warning("invalid url action=paste_url url=%r", url)
+            return
+
+        self.process_url(url, action="paste_url")
 
     @rumps.clicked("Send from Clipboard")
     def send_from_clipboard(self, _):
+        self.logger.info("action invoked action=clipboard")
         try:
             import AppKit
+
             pb = AppKit.NSPasteboard.generalPasteboard()
             url = pb.stringForType_(AppKit.NSStringPboardType)
-            if url and url.startswith(("http://", "https://")):
-                self.process_url(url.strip())
+            if url and is_valid_url(url.strip()):
+                cleaned_url = url.strip()
+                self.logger.info("clipboard url detected url=%r", cleaned_url)
+                self.process_url(cleaned_url, action="clipboard")
             else:
-                rumps.notification("Kindle Send", "", "No valid URL in clipboard")
+                notify(APP_NAME, "Invalid URL", "No valid http(s) URL in clipboard")
+                self.logger.warning("invalid clipboard url value=%r", url)
         except Exception as e:
-            rumps.notification("Kindle Send", "Error", str(e))
+            self.logger.exception("clipboard action failed")
+            notify(APP_NAME, "Error", str(e))
 
     @rumps.clicked("Settings...")
     def open_settings(self, _):
@@ -119,7 +241,7 @@ class KindleSendApp(rumps.App):
         # Kindle email
         window = rumps.Window(
             message="Enter your Kindle email address:\n(e.g., yourname@kindle.com)",
-            title="Kindle Send Settings",
+            title=f"{APP_NAME} Settings",
             default_text=self.config.get("kindle_email", ""),
             ok="Next",
             cancel="Cancel",
@@ -133,7 +255,7 @@ class KindleSendApp(rumps.App):
         # SMTP email
         window = rumps.Window(
             message="Enter your Gmail address:",
-            title="Kindle Send Settings",
+            title=f"{APP_NAME} Settings",
             default_text=self.config.get("smtp_email", ""),
             ok="Next",
             cancel="Cancel",
@@ -147,7 +269,7 @@ class KindleSendApp(rumps.App):
         # SMTP password
         window = rumps.Window(
             message="Enter your Gmail app password:\n(Get one at myaccount.google.com/apppasswords)",
-            title="Kindle Send Settings",
+            title=f"{APP_NAME} Settings",
             default_text=self.config.get("smtp_password", ""),
             ok="Save",
             cancel="Cancel",
@@ -160,30 +282,42 @@ class KindleSendApp(rumps.App):
 
         # Save config
         save_config(self.config)
-        rumps.notification("Kindle Send", "Settings saved", "")
+        notify(APP_NAME, "Settings saved", "")
 
-    def process_url(self, url: str):
+    def process_url(self, url: str, action: str):
         """Process URL in background thread."""
-        rumps.notification("Kindle Send", "", f"Fetching article...")
-        thread = threading.Thread(target=self._send_article_thread, args=(url,))
+        notify(APP_NAME, "Starting...", "Preparing article for Kindle")
+        self.logger.info("processing started action=%s url=%r", action, url)
+        thread = threading.Thread(target=self._send_article_thread, args=(url, action))
         thread.daemon = True
         thread.start()
 
-    def _send_article_thread(self, url: str):
+    def _send_article_thread(self, url: str, action: str):
         """Background thread for fetching and sending."""
         try:
+            self.logger.info("extraction start action=%s url=%r", action, url)
             # Fetch with trafilatura, fallback to requests if needed
-            downloaded = trafilatura.fetch_url(url)
+            downloaded = trafilatura.fetch_url(url, config=self.extract_config)
             if not downloaded:
                 # Fallback: try with requests
                 try:
-                    response = requests.get(url, timeout=30, headers={
-                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-                    })
+                    response = requests.get(
+                        url,
+                        timeout=30,
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+                        },
+                    )
                     response.raise_for_status()
                     downloaded = response.text
+                    self.logger.info(
+                        "fallback fetch succeeded action=%s status=%s",
+                        action,
+                        response.status_code,
+                    )
                 except Exception as req_err:
-                    rumps.notification("Kindle Send", "Error", f"Could not fetch: {str(req_err)[:50]}")
+                    self.logger.exception("fetch failed action=%s url=%r", action, url)
+                    notify(APP_NAME, "Error", f"Could not fetch: {str(req_err)[:80]}")
                     return
 
             # Get metadata
@@ -198,24 +332,44 @@ class KindleSendApp(rumps.App):
                 include_images=False,
                 include_formatting=True,
                 output_format="html",
+                config=self.extract_config,
             )
 
             if not content:
-                rumps.notification("Kindle Send", "Error", "Could not extract content")
+                self.logger.error(
+                    "empty extraction result action=%s url=%r", action, url
+                )
+                notify(APP_NAME, "Error", "Could not extract content")
                 return
 
+            self.logger.info(
+                "extraction end action=%s title=%r extracted_chars=%s",
+                action,
+                title,
+                len(content),
+            )
+
             # Remove duplicate title (trafilatura includes h1)
-            content = re.sub(r'<h1>[^<]*</h1>\s*', '', content, count=1)
+            content = re.sub(r"<h1>[^<]*</h1>\s*", "", content, count=1)
 
             # Build HTML
+            self.logger.info("conversion start action=%s title=%r", action, title)
             html = self._wrap_html(content, title, author, url)
+            self.logger.info(
+                "conversion end action=%s title=%r html_chars=%s",
+                action,
+                title,
+                len(html),
+            )
 
             # Send to Kindle
             self._send_email(html, title)
-            rumps.notification("Kindle Send", "✓ Sent!", title[:50])
+            notify(APP_NAME, "Sent ✅", title[:60])
 
         except Exception as e:
-            rumps.notification("Kindle Send", "Error", str(e)[:100])
+            self.logger.error("processing failed action=%s url=%r", action, url)
+            self.logger.error("traceback:\n%s", traceback.format_exc())
+            notify(APP_NAME, "Error", str(e)[:120])
 
     def _wrap_html(self, content: str, title: str, author: str, url: str) -> str:
         """Wrap content in clean HTML document."""
@@ -261,7 +415,7 @@ class KindleSendApp(rumps.App):
 
     def _sanitize_filename(self, title: str) -> str:
         """Remove problematic characters from filename."""
-        sanitized = re.sub(r'[<>:"/\\|?*]', '', title)
+        sanitized = re.sub(r'[<>:"/\\|?*]', "", title)
         sanitized = sanitized.replace("'", "").replace("'", "")
         return sanitized[:100].strip()
 
@@ -274,9 +428,19 @@ class KindleSendApp(rumps.App):
         smtp_port = self.config.get("smtp_port", 587)
 
         if not all([kindle_email, smtp_email, smtp_password]):
-            raise ValueError("Missing email configuration. Go to Settings to configure.")
+            raise ValueError(
+                "Missing email configuration. Go to Settings to configure."
+            )
 
         filename = self._sanitize_filename(title)
+        self.logger.info(
+            "email send start to=%r from=%r smtp_server=%r smtp_port=%r title=%r",
+            kindle_email,
+            smtp_email,
+            smtp_server,
+            smtp_port,
+            title,
+        )
 
         msg = MIMEMultipart()
         msg["From"] = smtp_email
@@ -290,7 +454,10 @@ class KindleSendApp(rumps.App):
         with smtplib.SMTP(smtp_server, smtp_port) as server:
             server.starttls()
             server.login(smtp_email, smtp_password)
-            server.send_message(msg)
+            response = server.send_message(msg)
+            self.logger.info(
+                "email send end title=%r smtp_response=%r", title, response
+            )
 
 
 if __name__ == "__main__":
