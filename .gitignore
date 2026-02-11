@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# macOS
+.DS_Store
+*.app
+AppIcon.iconset/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Config (contains credentials)
+# Note: Users should configure via Settings menu
+
+# Byte-compiled / optimized / DLL files
+*.egg-info/
+*.egg
+
+# Test HTML files
+atlantic_*.html
