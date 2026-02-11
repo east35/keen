@@ -1,65 +1,93 @@
-# kindle-send
+# Keen
 
-Send web articles to your Kindle from the command line.
+A macOS menu bar app to send web articles to your Kindle.
 
-## Setup (5 minutes)
+## Features
 
-### 1. Install
+- **Menu bar app** — Lives in your menu bar, always ready
+- **One-click sending** — Paste a URL or send from clipboard
+- **Clean formatting** — Articles extracted and formatted for Kindle
+- **Settings UI** — Configure credentials through the app
+
+## Installation
+
+### Option 1: Build from source
 
 ```bash
-pip install trafilatura
+git clone https://github.com/east35/keen.git
+cd keen
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Build the app
+pyinstaller --onedir --windowed --name "Kindle Send" --icon AppIcon.icns \
+  --add-data "iconTemplate.png:." --add-data "iconTemplate@2x.png:." kindle_menubar.py
+
+cp iconTemplate.png iconTemplate@2x.png "dist/Kindle Send.app/Contents/Resources/"
+
+# Install to Applications
+cp -r "dist/Kindle Send.app" /Applications/
 ```
 
-### 2. Get your Kindle email address
+### Option 2: Run in dev mode
 
-Find it on your Kindle: Settings → Your Account → Send-to-Kindle Email
+```bash
+source venv/bin/activate
+python kindle_menubar.py
+```
 
-Or at: amazon.com/myk → Preferences → Personal Document Settings
+## Setup
+
+### 1. Get your Kindle email address
+
+Find it on your Kindle: **Settings → Your Account → Send-to-Kindle Email**
+
+Or at: [amazon.com/myk](https://amazon.com/myk) → Preferences → Personal Document Settings
 
 It looks like: `yourname_abc123@kindle.com`
 
-### 3. Authorize your sending email
+### 2. Authorize your sending email
 
-In the same Amazon settings page, scroll to "Approved Personal Document E-mail List" and add your Gmail address.
+In the same Amazon settings page, scroll to **Approved Personal Document E-mail List** and add your Gmail address.
 
-### 4. Get a Gmail app password
+### 3. Get a Gmail app password
 
 1. Enable 2FA on your Google account (if not already)
 2. Go to: https://myaccount.google.com/apppasswords
 3. Generate a password for "Mail"
-4. Copy the 16-character password (spaces don't matter)
+4. Copy the 16-character password
 
-### 5. Set environment variables
+### 4. Configure the app
 
-Add to your `~/.bashrc` or `~/.zshrc`:
+1. Click the **K** icon in your menu bar
+2. Select **Settings...**
+3. Enter your Kindle email, Gmail, and app password
 
-```bash
-export KINDLE_EMAIL="yourname_abc123@kindle.com"
-export SMTP_EMAIL="you@gmail.com"
-export SMTP_PASSWORD="xxxx xxxx xxxx xxxx"
-```
-
-Then reload: `source ~/.bashrc`
+Settings are saved to `~/Library/Application Support/KindleSend/config.json`
 
 ## Usage
 
+1. Copy an article URL to your clipboard
+2. Click the **K** icon in your menu bar
+3. Select **Send from Clipboard** or **Send Article to Kindle**
+4. Article arrives on your Kindle in 1-2 minutes
+
+## CLI Usage
+
+You can also use the command-line script:
+
 ```bash
-python kindle_send.py "https://example.com/interesting-article"
-```
+export KINDLE_EMAIL="yourname@kindle.com"
+export SMTP_EMAIL="you@gmail.com"
+export SMTP_PASSWORD="xxxx xxxx xxxx xxxx"
 
-### Optional: Make it a command
-
-```bash
-chmod +x kindle_send.py
-sudo ln -s $(pwd)/kindle_send.py /usr/local/bin/kindle-send
-
-# Now you can just run:
-kindle-send "https://example.com/article"
+python kindle_send.py "https://example.com/article"
 ```
 
 ## Notes
 
 - Articles typically arrive within 1-2 minutes
 - Your Kindle needs Wi-Fi to sync
-- Images are disabled by default (they bloat the file and render poorly)
+- Images are disabled (Kindle email doesn't support external images)
 - Works with most article sites; may struggle with heavy JavaScript sites
