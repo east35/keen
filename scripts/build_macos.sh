@@ -3,6 +3,11 @@ set -e
 
 cd "$(dirname "$0")/.."
 
+# Activate virtual environment if it exists
+if [ -d "venv" ]; then
+    source venv/bin/activate
+fi
+
 echo "==> Generating icons from source assets..."
 
 # Create iconset directory for app icon
