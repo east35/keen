@@ -8,6 +8,7 @@ A macOS menu bar app to send web articles to your Kindle.
 - **One-click sending** — Paste a URL or send from clipboard
 - **Clean formatting** — Articles extracted and formatted for Kindle
 - **Settings UI** — Configure credentials through the app
+- **Secure storage** — SMTP password stored in macOS Keychain, not on disk
 
 ## Installation
 
@@ -121,7 +122,9 @@ In the same Amazon settings page, scroll to **Approved Personal Document E-mail 
 2. Select **Settings...**
 3. Enter your Kindle email, Gmail, and app password
 
-Settings are saved to `~/Library/Application Support/KindleSend/config.json`
+Email addresses and server settings are saved to `~/Library/Application Support/KindleSend/config.json`. Your SMTP app password is stored securely in the **macOS Keychain** (via the `keyring` library) and is never written to disk in plaintext.
+
+> **Migration note:** If you previously used an older version that stored the password in `config.json`, Keen will automatically move it to the Keychain on first launch and remove it from the config file.
 
 ## Usage
 
@@ -141,6 +144,8 @@ export SMTP_PASSWORD="xxxx xxxx xxxx xxxx"
 
 python kindle_send.py "https://example.com/article"
 ```
+
+> The CLI reads credentials from environment variables only. It does not use the Keychain.
 
 ## Notes
 

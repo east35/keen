@@ -4,20 +4,21 @@ kindle-send: Extract web articles and send to Kindle via email.
 
 Usage:
     python kindle_send.py <url>
-    
-First run: Set environment variables or create a .env file:
-    KINDLE_EMAIL=your_kindle@kindle.com
-    SMTP_EMAIL=your_gmail@gmail.com
-    SMTP_PASSWORD=your_app_password
+
+First run: Set environment variables:
+    export KINDLE_EMAIL=your_kindle@kindle.com
+    export SMTP_EMAIL=your_gmail@gmail.com
+    export SMTP_PASSWORD=your_app_password
 """
 
-import sys
+import html as html_mod
 import os
 import re
 import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import ssl
+import sys
 from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 
 try:
@@ -66,14 +67,17 @@ def extract_article(url: str) -> tuple[str, str, str]:
 def wrap_html(content: str, title: str, author: str, url: str) -> str:
     """Wrap extracted content in a clean HTML document."""
     date = datetime.now().strftime("%B %d, %Y")
-    author_line = f"<p class='author'>By {author}</p>" if author else ""
+    esc_title = html_mod.escape(title)
+    esc_author = html_mod.escape(author)
+    esc_url = html_mod.escape(url)
+    author_line = f"<p class='author'>By {esc_author}</p>" if author else ""
     
     return f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{title}</title>
+    <title>{esc_title}</title>
     <style>
         body {{
             font-family: Georgia, serif;
@@ -112,10 +116,10 @@ def wrap_html(content: str, title: str, author: str, url: str) -> str:
     </style>
 </head>
 <body>
-    <h1>{title}</h1>
+    <h1>{esc_title}</h1>
     <div class="meta">
         {author_line}
-        <p class="source">Source: {url}</p>
+        <p class="source">Source: {esc_url}</p>
         <p class="date">Saved: {date}</p>
     </div>
     <article>
@@ -160,8 +164,11 @@ def send_to_kindle(html: str, title: str) -> None:
     attachment["Content-Disposition"] = f'attachment; filename="{filename}.html"'
     msg.attach(attachment)
     
+    ctx = ssl.create_default_context()
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-        server.starttls()
+        server.ehlo()
+        server.starttls(context=ctx)
+        server.ehlo()
         server.login(SMTP_EMAIL, SMTP_PASSWORD)
         server.send_message(msg)
 

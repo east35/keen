@@ -30,8 +30,9 @@ iconTemplate@2x.png
 *.swp
 *.swo
 
-# Config (contains credentials)
-# Note: Users should configure via Settings menu
+# Secrets / environment
+.env
+# Note: SMTP password is stored in OS keychain, not in config.json
 
 # Byte-compiled / optimized / DLL files
 *.egg-info/

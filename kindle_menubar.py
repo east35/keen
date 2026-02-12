@@ -4,11 +4,15 @@ Keen - macOS Menu Bar App
 Send web articles to your Kindle with one click.
 """
 
+import html as html_mod
+import ipaddress
 import json
 import logging
 import os
 import re
 import smtplib
+import socket
+import ssl
 import threading
 import traceback
 from configparser import ConfigParser
@@ -16,8 +20,9 @@ from datetime import datetime
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
+import keyring
 import requests
 import rumps
 import trafilatura
@@ -28,6 +33,116 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 LOG_DIR = Path.home() / "Library" / "Logs" / "Keen"
 LOG_FILE = LOG_DIR / "keen.log"
 APP_NAME = "Keen"
+KEYRING_SERVICE = "keen-sender"
+
+# ---------------------------------------------------------------------------
+# Security helpers
+# ---------------------------------------------------------------------------
+
+
+def redact_url(url: str) -> str:
+    """Strip querystring and fragment from a URL for safe logging."""
+    try:
+        parsed = urlparse(url)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+    except Exception:
+        return "<unparseable-url>"
+
+
+def mask_email(email: str) -> str:
+    """Mask the local part of an email for safe logging (e.g. j***@domain.com)."""
+    if not email or "@" not in email:
+        return "<no-email>"
+    local, domain = email.rsplit("@", 1)
+    if len(local) <= 1:
+        masked = "*"
+    else:
+        masked = local[0] + "***"
+    return f"{masked}@{domain}"
+
+
+def _is_public_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True only if *addr* is a globally routable, non-reserved IP."""
+    return addr.is_global and not (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_multicast
+        or addr.is_unspecified
+    )
+
+
+def check_url_ssrf(url: str) -> str | None:
+    """Validate that *url* resolves only to public IPs.
+
+    Returns None on success or an error message string on failure.
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        return "URL has no hostname"
+
+    # Reject bare IP addresses in private ranges
+    try:
+        literal = ipaddress.ip_address(hostname)
+        if not _is_public_ip(literal):
+            return "URL points to a non-public IP address"
+    except ValueError:
+        pass  # hostname is a DNS name, resolve below
+
+    # Resolve DNS and check every returned address
+    try:
+        addrinfos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return "DNS resolution failed for URL hostname"
+
+    if not addrinfos:
+        return "DNS resolution returned no results"
+
+    for family, _type, _proto, _canon, sockaddr in addrinfos:
+        ip_str = sockaddr[0]
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return f"Unparseable resolved IP: {ip_str}"
+        if not _is_public_ip(addr):
+            return "URL resolves to a non-public IP address"
+
+    return None
+
+
+def get_smtp_password(smtp_email: str) -> str:
+    """Retrieve SMTP password from OS keychain."""
+    if not smtp_email:
+        return ""
+    try:
+        pw = keyring.get_password(KEYRING_SERVICE, smtp_email)
+        return pw or ""
+    except Exception:
+        return ""
+
+
+def set_smtp_password(smtp_email: str, password: str):
+    """Store SMTP password in OS keychain."""
+    keyring.set_password(KEYRING_SERVICE, smtp_email, password)
+
+
+def migrate_password_to_keyring(config: dict, logger: logging.Logger | None = None):
+    """If config.json still contains an smtp_password, move it to keyring and remove it."""
+    password = config.get("smtp_password", "")
+    smtp_email = config.get("smtp_email", "")
+    if password and smtp_email:
+        try:
+            set_smtp_password(smtp_email, password)
+            config.pop("smtp_password", None)
+            save_config(config)
+            if logger:
+                logger.info("migrated smtp password from config.json to OS keychain")
+        except Exception:
+            if logger:
+                logger.exception("failed to migrate smtp password to keychain")
+
 
 TRAFILATURA_DEFAULTS = {
     "DOWNLOAD_TIMEOUT": "30",
@@ -111,11 +226,15 @@ def build_trafilatura_config() -> ConfigParser:
 
 
 def load_config() -> dict:
-    """Load configuration from file or environment."""
+    """Load configuration from file or environment.
+
+    Note: SMTP password is *not* stored in config.json; it lives in the
+    OS keychain via the ``keyring`` library.  If an old config still
+    contains ``smtp_password`` it will be migrated on first access.
+    """
     config = {
         "kindle_email": os.environ.get("KINDLE_EMAIL", ""),
         "smtp_email": os.environ.get("SMTP_EMAIL", ""),
-        "smtp_password": os.environ.get("SMTP_PASSWORD", ""),
         "smtp_server": os.environ.get("SMTP_SERVER", "smtp.gmail.com"),
         "smtp_port": int(os.environ.get("SMTP_PORT", "587")),
     }
@@ -124,8 +243,14 @@ def load_config() -> dict:
             with open(CONFIG_FILE) as f:
                 saved = json.load(f)
                 config.update(saved)
-        except:
-            pass
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+            get_logger().warning("failed to load config file: %s", type(exc).__name__)
+
+    # Migrate legacy plaintext password to OS keychain
+    migrate_password_to_keyring(config)
+
+    # Never keep password in the in-memory config dict
+    config.pop("smtp_password", None)
     return config
 
 
@@ -211,7 +336,7 @@ class KindleSendApp(rumps.App):
 
         if not is_valid_url(url):
             notify(APP_NAME, "Invalid URL", "Please enter a valid http(s) URL")
-            self.logger.warning("invalid url action=paste_url url=%r", url)
+            self.logger.warning("invalid url action=paste_url url=<redacted>")
             return
 
         self.process_url(url, action="paste_url")
@@ -226,11 +351,11 @@ class KindleSendApp(rumps.App):
             url = pb.stringForType_(AppKit.NSStringPboardType)
             if url and is_valid_url(url.strip()):
                 cleaned_url = url.strip()
-                self.logger.info("clipboard url detected url=%r", cleaned_url)
+                self.logger.info("clipboard url detected url=%s", redact_url(cleaned_url))
                 self.process_url(cleaned_url, action="clipboard")
             else:
                 notify(APP_NAME, "Invalid URL", "No valid http(s) URL in clipboard")
-                self.logger.warning("invalid clipboard url value=%r", url)
+                self.logger.warning("invalid clipboard url value=<redacted>")
         except Exception as e:
             self.logger.exception("clipboard action failed")
             notify(APP_NAME, "Error", str(e))
@@ -266,11 +391,13 @@ class KindleSendApp(rumps.App):
             return
         self.config["smtp_email"] = response.text.strip()
 
-        # SMTP password
+        # SMTP password — never prefill; blank = keep existing
+        has_existing = bool(get_smtp_password(self.config.get("smtp_email", "")))
+        hint = "Leave blank to keep current password" if has_existing else ""
         window = rumps.Window(
-            message="Enter your Gmail app password:\n(Get one at myaccount.google.com/apppasswords)",
+            message=f"Enter your Gmail app password:\n(Get one at myaccount.google.com/apppasswords)\n{hint}",
             title=f"{APP_NAME} Settings",
-            default_text=self.config.get("smtp_password", ""),
+            default_text="",
             ok="Save",
             cancel="Cancel",
             dimensions=(350, 24),
@@ -278,16 +405,25 @@ class KindleSendApp(rumps.App):
         response = window.run()
         if not response.clicked:
             return
-        self.config["smtp_password"] = response.text.strip()
+        new_password = response.text.strip()
+        if new_password:
+            set_smtp_password(self.config["smtp_email"], new_password)
 
-        # Save config
+        # Save config (password is NOT in config dict)
         save_config(self.config)
         notify(APP_NAME, "Settings saved", "")
 
     def process_url(self, url: str, action: str):
         """Process URL in background thread."""
+        # SSRF check: block private/reserved/link-local IPs
+        ssrf_err = check_url_ssrf(url)
+        if ssrf_err:
+            self.logger.warning("SSRF blocked action=%s reason=%s", action, ssrf_err)
+            notify(APP_NAME, "Blocked", "URL target is not allowed")
+            return
+
         notify(APP_NAME, "Starting...", "Preparing article for Kindle")
-        self.logger.info("processing started action=%s url=%r", action, url)
+        self.logger.info("processing started action=%s url=%s", action, redact_url(url))
         thread = threading.Thread(target=self._send_article_thread, args=(url, action))
         thread.daemon = True
         thread.start()
@@ -295,7 +431,7 @@ class KindleSendApp(rumps.App):
     def _send_article_thread(self, url: str, action: str):
         """Background thread for fetching and sending."""
         try:
-            self.logger.info("extraction start action=%s url=%r", action, url)
+            self.logger.info("extraction start action=%s url=%s", action, redact_url(url))
             # Fetch with trafilatura, fallback to requests if needed
             downloaded = trafilatura.fetch_url(url, config=self.extract_config)
             if not downloaded:
@@ -316,7 +452,7 @@ class KindleSendApp(rumps.App):
                         response.status_code,
                     )
                 except Exception as req_err:
-                    self.logger.exception("fetch failed action=%s url=%r", action, url)
+                    self.logger.exception("fetch failed action=%s url=%s", action, redact_url(url))
                     notify(APP_NAME, "Error", f"Could not fetch: {str(req_err)[:80]}")
                     return
 
@@ -337,7 +473,7 @@ class KindleSendApp(rumps.App):
 
             if not content:
                 self.logger.error(
-                    "empty extraction result action=%s url=%r", action, url
+                    "empty extraction result action=%s url=%s", action, redact_url(url)
                 )
                 notify(APP_NAME, "Error", "Could not extract content")
                 return
@@ -367,21 +503,24 @@ class KindleSendApp(rumps.App):
             notify(APP_NAME, "Sent ✅", title[:60])
 
         except Exception as e:
-            self.logger.error("processing failed action=%s url=%r", action, url)
+            self.logger.error("processing failed action=%s url=%s", action, redact_url(url))
             self.logger.error("traceback:\n%s", traceback.format_exc())
             notify(APP_NAME, "Error", str(e)[:120])
 
     def _wrap_html(self, content: str, title: str, author: str, url: str) -> str:
         """Wrap content in clean HTML document."""
         date = datetime.now().strftime("%B %d, %Y")
-        author_line = f"<p class='author'>By {author}</p>" if author else ""
+        esc_title = html_mod.escape(title)
+        esc_author = html_mod.escape(author)
+        esc_url = html_mod.escape(url)
+        author_line = f"<p class='author'>By {esc_author}</p>" if author else ""
 
         return f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{title}</title>
+    <title>{esc_title}</title>
     <style>
         body {{
             font-family: Georgia, serif;
@@ -401,10 +540,10 @@ class KindleSendApp(rumps.App):
     </style>
 </head>
 <body>
-    <h1>{title}</h1>
+    <h1>{esc_title}</h1>
     <div class="meta">
         {author_line}
-        <p class="source">Source: {url}</p>
+        <p class="source">Source: {esc_url}</p>
         <p class="date">Saved: {date}</p>
     </div>
     <article>
@@ -423,7 +562,7 @@ class KindleSendApp(rumps.App):
         """Send HTML to Kindle via email."""
         kindle_email = self.config.get("kindle_email", "")
         smtp_email = self.config.get("smtp_email", "")
-        smtp_password = self.config.get("smtp_password", "")
+        smtp_password = get_smtp_password(smtp_email)
         smtp_server = self.config.get("smtp_server", "smtp.gmail.com")
         smtp_port = self.config.get("smtp_port", 587)
 
@@ -434,9 +573,9 @@ class KindleSendApp(rumps.App):
 
         filename = self._sanitize_filename(title)
         self.logger.info(
-            "email send start to=%r from=%r smtp_server=%r smtp_port=%r title=%r",
-            kindle_email,
-            smtp_email,
+            "email send start to=%s from=%s smtp_server=%r smtp_port=%r title=%r",
+            mask_email(kindle_email),
+            mask_email(smtp_email),
             smtp_server,
             smtp_port,
             title,
@@ -451,8 +590,11 @@ class KindleSendApp(rumps.App):
         attachment["Content-Disposition"] = f'attachment; filename="{filename}.html"'
         msg.attach(attachment)
 
+        ctx = ssl.create_default_context()
         with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
+            server.ehlo()
+            server.starttls(context=ctx)
+            server.ehlo()
             server.login(smtp_email, smtp_password)
             response = server.send_message(msg)
             self.logger.info(
