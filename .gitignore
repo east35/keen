@@ -19,6 +19,11 @@ dist/
 *.app
 AppIcon.iconset/
 
+# Generated icons (built from assets/)
+AppIcon.icns
+iconTemplate.png
+iconTemplate@2x.png
+
 # IDE
 .idea/
 .vscode/
