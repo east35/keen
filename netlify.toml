@@ -1,0 +1,4 @@
+[build]
+  publish = "site"
+
+# No build step required; site/ is static.
