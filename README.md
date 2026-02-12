@@ -1,5 +1,7 @@
 # Keen
 
+![Keen splash](docs/splash.png)
+
 A macOS menu bar app to send web articles to your Kindle.
 
 ## Features
@@ -12,6 +14,12 @@ A macOS menu bar app to send web articles to your Kindle.
 
 ## Installation
 
+If you downloaded the DMG:
+
+- Open `Keen.dmg`
+- Drag `Keen.app` to Applications
+- Read `README_FIRST.txt` in the DMG for first-launch steps (Gatekeeper)
+
 ### Option 1: Build from source
 
 ```bash
@@ -20,7 +28,6 @@ cd keen
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-pip install pyinstaller
 
 # Build the app bundle from spec
 bash scripts/build_macos.sh
@@ -37,6 +44,16 @@ python kindle_menubar.py
 ```
 
 Note: In dev mode, macOS notifications are attributed to `Python` (interpreter process). To get the proper app name/icon in notifications and the app menu, run the packaged `dist/Keen.app`.
+
+## Icons
+
+Keen tracks its app icon and menu bar template icons in the repo and bundles them into the built `.app` via `Keen.spec`.
+
+Verify icons are present and bundled:
+
+```bash
+python scripts/verify_icons.py --app dist/Keen.app
+```
 
 ## Diagnostics & Logs
 

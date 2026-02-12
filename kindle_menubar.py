@@ -12,6 +12,7 @@ import os
 import re
 import smtplib
 import socket
+import subprocess
 import ssl
 import threading
 import traceback
@@ -198,6 +199,31 @@ def notify(title: str, subtitle: str, message: str):
     except Exception:
         logger.exception("failed to display macOS notification")
 
+    # Additional banner path: macOS may suppress rumps notifications depending on
+    # app identity/notification settings. Use AppleScript as a best-effort fallback.
+    if os.environ.get("KEEN_OSASCRIPT_NOTIFY", "1") == "1":
+        try:
+            safe_title = (title or "")[:200]
+            safe_subtitle = (subtitle or "")[:200]
+            safe_message = (message or "")[:500]
+
+            def _esc(s: str) -> str:
+                return s.replace("\\", "\\\\").replace('"', '\\"')
+
+            script = (
+                f'display notification "{_esc(safe_message)}" '
+                f'with title "{_esc(safe_title)}" '
+                f'subtitle "{_esc(safe_subtitle)}"'
+            )
+            subprocess.run(
+                ["/usr/bin/osascript", "-e", script],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            logger.exception("failed to display osascript notification")
+
 
 def is_valid_url(url: str) -> bool:
     """Validate HTTP(S) URLs."""
@@ -298,7 +324,10 @@ class KindleSendApp(rumps.App):
         else:
             # Fallback to text
             super().__init__("K", quit_button=None)
+
         self.logger = get_logger()
+        self._title_reset_timer: threading.Timer | None = None
+        self._last_status: str = ""
         self.config = load_config()
         self.extract_config = build_trafilatura_config()
         self.logger.info("app started")
@@ -310,6 +339,36 @@ class KindleSendApp(rumps.App):
             rumps.MenuItem("Settings...", callback=self.open_settings),
             rumps.MenuItem("Quit", callback=rumps.quit_application),
         ]
+
+    def _set_status(self, symbol: str, message: str = "", reset_after_s: float = 5.0):
+        """Fallback status indicator when macOS notifications are suppressed.
+
+        We keep the menu bar icon unchanged, but temporarily set the title to a small
+        symbol so there is always some visible feedback.
+        """
+        self._last_status = message or self._last_status
+
+        try:
+            if self._title_reset_timer:
+                self._title_reset_timer.cancel()
+        except Exception:
+            pass
+
+        try:
+            self.title = symbol
+        except Exception:
+            return
+
+        def _reset():
+            try:
+                self.title = ""
+            except Exception:
+                pass
+
+        if reset_after_s and reset_after_s > 0:
+            self._title_reset_timer = threading.Timer(reset_after_s, _reset)
+            self._title_reset_timer.daemon = True
+            self._title_reset_timer.start()
 
     @rumps.clicked("Send Article to Kindle")
     def send_article(self, _):
@@ -419,9 +478,11 @@ class KindleSendApp(rumps.App):
         ssrf_err = check_url_ssrf(url)
         if ssrf_err:
             self.logger.warning("SSRF blocked action=%s reason=%s", action, ssrf_err)
+            self._set_status("!", "Blocked URL", reset_after_s=8.0)
             notify(APP_NAME, "Blocked", "URL target is not allowed")
             return
 
+        self._set_status("…", "Sending…", reset_after_s=0)
         notify(APP_NAME, "Starting...", "Preparing article for Kindle")
         self.logger.info("processing started action=%s url=%s", action, redact_url(url))
         thread = threading.Thread(target=self._send_article_thread, args=(url, action))
@@ -500,11 +561,13 @@ class KindleSendApp(rumps.App):
 
             # Send to Kindle
             self._send_email(html, title)
+            self._set_status("✓", "Sent", reset_after_s=6.0)
             notify(APP_NAME, "Sent ✅", title[:60])
 
         except Exception as e:
             self.logger.error("processing failed action=%s url=%s", action, redact_url(url))
             self.logger.error("traceback:\n%s", traceback.format_exc())
+            self._set_status("!", "Error", reset_after_s=10.0)
             notify(APP_NAME, "Error", str(e)[:120])
 
     def _wrap_html(self, content: str, title: str, author: str, url: str) -> str:
@@ -602,5 +665,22 @@ class KindleSendApp(rumps.App):
             )
 
 
+def _set_app_icon():
+    """Set the NSApplication icon before any UI is shown."""
+    try:
+        import AppKit
+        app_icon = resource_path("assets/app-icon.png")
+        if not app_icon.exists():
+            app_icon = resource_path("app-icon.png")
+        if app_icon.exists():
+            image = AppKit.NSImage.alloc().initWithContentsOfFile_(str(app_icon.resolve()))
+            if image:
+                app = AppKit.NSApplication.sharedApplication()
+                app.setApplicationIconImage_(image)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
+    _set_app_icon()
     KindleSendApp().run()

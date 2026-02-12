@@ -1,0 +1,43 @@
+name: Verify Icons
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  verify-icons:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Build app
+        run: bash scripts/build_macos.sh
+
+      - name: Verify icon assets
+        run: python scripts/verify_icons.py --app dist/Keen.app
+
+      - name: Package DMG
+        run: bash scripts/package_dmg.sh
+
+      - name: Verify DMG includes README
+        run: |
+          set -e
+          MOUNT_DIR=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_DIR" Keen.dmg > /dev/null
+          test -f "$MOUNT_DIR/README_FIRST.txt"
+          test -d "$MOUNT_DIR/Keen.app"
+          test -L "$MOUNT_DIR/Applications" || test -e "$MOUNT_DIR/Applications"
+          hdiutil detach "$MOUNT_DIR" > /dev/null
+          rmdir "$MOUNT_DIR"

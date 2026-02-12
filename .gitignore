@@ -14,15 +14,15 @@ build/
 dist/
 *.spec
 
+# Keep the project's spec file tracked
+!Keen.spec
+
 # macOS
 .DS_Store
 *.app
 AppIcon.iconset/
 
-# Generated icons (built from assets/)
-AppIcon.icns
-iconTemplate.png
-iconTemplate@2x.png
+# Icon assets are tracked (used by packaging)
 
 # IDE
 .idea/

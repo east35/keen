@@ -29,7 +29,7 @@ for size in sizes:
 print('Generated app icon sizes')
 "
 
-# Convert to icns
+# Convert to icns (tracked by git)
 iconutil -c icns AppIcon.iconset -o AppIcon.icns
 rm -rf AppIcon.iconset
 echo "==> Created AppIcon.icns"
@@ -58,18 +58,6 @@ print('Generated menu bar icons')
 
 echo "==> Building app bundle with PyInstaller..."
 
-pyinstaller --onedir --windowed \
-    --name "Keen" \
-    --osx-bundle-identifier com.keen.app \
-    --icon AppIcon.icns \
-    --add-data "iconTemplate.png:." \
-    --add-data "iconTemplate@2x.png:." \
-    kindle_menubar.py
-
-# Copy menu bar icons to Resources
-cp iconTemplate.png iconTemplate@2x.png "dist/Keen.app/Contents/Resources/"
-
-# Clean up generated files
-rm -f AppIcon.icns iconTemplate.png iconTemplate@2x.png
+pyinstaller --noconfirm Keen.spec
 
 echo "==> Build complete: dist/Keen.app"
